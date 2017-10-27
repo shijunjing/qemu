@@ -84,7 +84,7 @@ static void pc_isa_bios_init(MemoryRegion *rom_memory,
  * only 18MB-4KB below 4G. For now, restrict the cumulative mapping to 8MB in
  * size.
  */
-#define FLASH_MAP_BASE_MIN ((hwaddr)(4 * GiB - 8 * MiB))
+#define FLASH_MAP_BASE_MIN ((hwaddr)(4 * GiB - 16 * MiB))
 
 /* This function maps flash drives from 4G downward, in order of their unit
  * numbers. The mapping starts at unit#0, with unit number increments of 1, and
