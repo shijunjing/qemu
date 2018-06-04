@@ -18,6 +18,7 @@
 
 typedef struct IDEBus IDEBus;
 typedef struct IDEDevice IDEDevice;
+typedef struct IDEBridgeDevice IDEBridgeDevice;
 typedef struct IDEState IDEState;
 typedef struct IDEDMA IDEDMA;
 typedef struct IDEDMAOps IDEDMAOps;
@@ -493,10 +494,19 @@ struct IDEBus {
 #define IDE_DEVICE_GET_CLASS(obj) \
      OBJECT_GET_CLASS(IDEDeviceClass, (obj), TYPE_IDE_DEVICE)
 
+#define TYPE_IDE_BRIDGE_DEVICE "ide-bridge-device"
+#define IDE_BRIDGE_DEVICE(obj) \
+     OBJECT_CHECK(IDEBridgeDevice, (obj), TYPE_IDE_BRIDGE_DEVICE)
+
+#define TYPE_IDE_BRIDGE_HD "ide-bridge-hd"
+#define IDE_BRIDGE_HD(obj) \
+     OBJECT_CHECK(IDEBridgeDevice, (obj), TYPE_IDE_BRIDGE_HD)
+
 typedef struct IDEDeviceClass {
     DeviceClass parent_class;
     void (*realize)(IDEDevice *dev, Error **errp);
 } IDEDeviceClass;
+
 
 struct IDEDevice {
     DeviceState qdev;
@@ -517,6 +527,10 @@ struct IDEDevice {
     uint16_t rotation_rate;
 };
 
+struct IDEBridgeDevice {
+  IDEDevice dev;
+  IDEBus EmbeddedIdeBus;
+};
 /* These are used for the error_status field of IDEBus */
 #define IDE_RETRY_MASK 0xf8
 #define IDE_RETRY_DMA  0x08

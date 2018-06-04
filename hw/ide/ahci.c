@@ -1834,6 +1834,7 @@ void ahci_ide_create_devs(PCIDevice *dev, DriveInfo **hd)
             continue;
         }
         ide_create_drive(&ahci->dev[i].port, 0, hd[i]);
+        break; // only create one, just for debug
     }
 
 }
