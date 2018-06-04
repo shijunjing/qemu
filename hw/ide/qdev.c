@@ -122,7 +122,7 @@ IDEDevice *ide_create_drive(IDEBus *bus, int unit, DriveInfo *drive)
 {
     DeviceState *dev;
 
-    dev = qdev_create(&bus->qbus, drive->media_cd ? "ide-cd" : "ide-hd");
+    dev = qdev_create(&bus->qbus, drive->media_cd ? "ide-cd" : TYPE_IDE_BRIDGE_HD);
     qdev_prop_set_uint32(dev, "unit", unit);
     qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(drive),
                         &error_fatal);
@@ -266,6 +266,41 @@ static void ide_hd_realize(IDEDevice *dev, Error **errp)
     ide_dev_initfn(dev, IDE_HD, errp);
 }
 
+static void dummy_irq_set(void *opaque, int n, int level)
+{
+}
+//
+// This a wrapper function on ide_hd_realize, and extend to create
+// a new child embedded IDE bus and child HD drive inside the HD device
+//
+static void ide_bridge_hd_realize(IDEDevice *dev, Error **errp)
+{
+    IDEBridgeDevice *d = IDE_BRIDGE_HD(dev);
+    qemu_irq *irqs;
+    //
+    // 1. Create normal IDE HD as before firstly
+    //
+    ide_hd_realize(dev, errp);
+    //
+    // 2. Create a new child IDE bus inside the IDE HD in above step 1
+    //
+    ide_bus_new(&d->EmbeddedIdeBus, sizeof(d->EmbeddedIdeBus), (DeviceState *)dev, 0, 1);
+    irqs = qemu_extend_irqs(NULL, 0, dummy_irq_set, d, 1);
+    ide_init2(&d->EmbeddedIdeBus, irqs[0]);
+    //
+    // 3. Create a new child drive under the inside bus in step 2
+    //
+    DeviceState *edev = qdev_create(&d->EmbeddedIdeBus.qbus, "ide-hd");
+    //DriveInfo *hd = drive_get_by_index(IF_IDE, 0);
+    DriveInfo *hd2 = drive_get_by_index(IF_IDE, 1);
+    //BlockBackend *bb = blk_by_legacy_dinfo(hd);
+    BlockBackend *bb2 = blk_by_legacy_dinfo(hd2);
+    qdev_prop_set_uint32(edev, "unit", 0);
+    //qdev_prop_set_drive(edev, "drive", bb, &error_fatal);
+    qdev_prop_set_drive(edev, "drive", bb2, &error_fatal);
+    qdev_init_nofail(edev);
+}
+
 static void ide_cd_realize(IDEDevice *dev, Error **errp)
 {
     ide_dev_initfn(dev, IDE_CD, errp);
@@ -363,6 +398,23 @@ static const TypeInfo ide_drive_info = {
     .class_init    = ide_drive_class_init,
 };
 
+static void ide_bridge_hd_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    IDEDeviceClass *k = IDE_DEVICE_CLASS(klass);
+
+    k->realize  = ide_bridge_hd_realize;
+    dc->fw_name = "bridge-drive";
+    dc->desc    = "virtual IDE bridge disk";
+}
+
+static const TypeInfo ide_bridge_hd_info = {
+    .name          = TYPE_IDE_BRIDGE_HD,
+    .parent        = "ide-hd",
+    .instance_size = sizeof(IDEBridgeDevice),
+    .class_init    = ide_bridge_hd_class_init,
+};
+
 static void ide_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
@@ -389,6 +441,7 @@ static void ide_register_types(void)
     type_register_static(&ide_cd_info);
     type_register_static(&ide_drive_info);
     type_register_static(&ide_device_type_info);
+    type_register_static(&ide_bridge_hd_info);
 }
 
 type_init(ide_register_types)
