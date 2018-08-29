@@ -345,21 +345,6 @@ static int img_add_key_secrets(void *opaque,
     return 0;
 }
 
-static BlockBackend *img_open_new_file(const char *filename,
-                                       QemuOpts *create_opts,
-                                       const char *fmt, int flags,
-                                       bool writethrough, bool quiet,
-                                       bool force_share)
-{
-    QDict *options = NULL;
-
-    options = qdict_new();
-    qemu_opt_foreach(create_opts, img_add_key_secrets, options, &error_abort);
-
-    return img_open_file(filename, options, fmt, flags, writethrough, quiet,
-                         force_share);
-}
-
 
 static BlockBackend *img_open(bool image_opts,
                               const char *filename,
@@ -2018,17 +2003,19 @@ static int img_convert(int argc, char **argv)
     BlockDriverState *out_bs;
     QemuOpts *opts = NULL, *sn_opts = NULL;
     QemuOptsList *create_opts = NULL;
+    QDict *open_opts = NULL;
     char *options = NULL;
     Error *local_err = NULL;
     bool writethrough, src_writethrough, quiet = false, image_opts = false,
          skip_create = false, progress = false, tgt_image_opts = false;
     int64_t ret = -EINVAL;
     bool force_share = false;
+    bool explict_min_sparse = false;
 
     ImgConvertState s = (ImgConvertState) {
         /* Need at least 4k of zeros for sparse detection */
         .min_sparse         = 8,
-        .copy_range         = true,
+        .copy_range         = false,
         .buf_sectors        = IO_BUF_SIZE / BDRV_SECTOR_SIZE,
         .wr_in_order        = true,
         .num_coroutines     = 8,
@@ -2043,7 +2030,7 @@ static int img_convert(int argc, char **argv)
             {"target-image-opts", no_argument, 0, OPTION_TARGET_IMAGE_OPTS},
             {0, 0, 0, 0}
         };
-        c = getopt_long(argc, argv, ":hf:O:B:co:l:S:pt:T:qnm:WU",
+        c = getopt_long(argc, argv, ":hf:O:B:Cco:l:S:pt:T:qnm:WU",
                         long_options, NULL);
         if (c == -1) {
             break;
@@ -2067,9 +2054,11 @@ static int img_convert(int argc, char **argv)
         case 'B':
             out_baseimg = optarg;
             break;
+        case 'C':
+            s.copy_range = true;
+            break;
         case 'c':
             s.compressed = true;
-            s.copy_range = false;
             break;
         case 'o':
             if (!is_valid_option_list(optarg)) {
@@ -2112,7 +2101,7 @@ static int img_convert(int argc, char **argv)
             }
 
             s.min_sparse = sval / BDRV_SECTOR_SIZE;
-            s.copy_range = false;
+            explict_min_sparse = true;
             break;
         }
         case 'p':
@@ -2169,6 +2158,16 @@ static int img_convert(int argc, char **argv)
     if (qemu_opts_foreach(&qemu_object_opts,
                           user_creatable_add_opts_foreach,
                           NULL, NULL)) {
+        goto fail_getopt;
+    }
+
+    if (s.compressed && s.copy_range) {
+        error_report("Cannot enable copy offloading when -c is used");
+        goto fail_getopt;
+    }
+
+    if (explict_min_sparse && s.copy_range) {
+        error_report("Cannot enable copy offloading when -S is used");
         goto fail_getopt;
     }
 
@@ -2349,6 +2348,16 @@ static int img_convert(int argc, char **argv)
         }
     }
 
+    /*
+     * The later open call will need any decryption secrets, and
+     * bdrv_create() will purge "opts", so extract them now before
+     * they are lost.
+     */
+    if (!skip_create) {
+        open_opts = qdict_new();
+        qemu_opt_foreach(opts, img_add_key_secrets, open_opts, &error_abort);
+    }
+
     if (!skip_create) {
         /* Create the new image */
         ret = bdrv_create(drv, out_filename, opts, &local_err);
@@ -2375,8 +2384,9 @@ static int img_convert(int argc, char **argv)
          * That has to wait for bdrv_create to be improved
          * to allow filenames in option syntax
          */
-        s.target = img_open_new_file(out_filename, opts, out_fmt,
-                                     flags, writethrough, quiet, false);
+        s.target = img_open_file(out_filename, open_opts, out_fmt,
+                                 flags, writethrough, quiet, false);
+        open_opts = NULL; /* blk_new_open will have freed it */
     }
     if (!s.target) {
         ret = -1;
@@ -2451,6 +2461,7 @@ out:
     qemu_opts_del(opts);
     qemu_opts_free(create_opts);
     qemu_opts_del(sn_opts);
+    qobject_unref(open_opts);
     blk_unref(s.target);
     if (s.src) {
         for (bs_i = 0; bs_i < s.src_num; bs_i++) {
