@@ -786,6 +786,9 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
                 SDL_GetError());
         exit(1);
     }
+#ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR /* only available since SDL 2.0.8 */
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+#endif
     SDL_SetHint(SDL_HINT_GRAB_KEYBOARD, "1");
     memset(&info, 0, sizeof(info));
     SDL_VERSION(&info.version);
@@ -806,7 +809,8 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
     for (i = 0; i < sdl2_num_outputs; i++) {
         QemuConsole *con = qemu_console_lookup_by_index(i);
         assert(con != NULL);
-        if (!qemu_console_is_graphic(con)) {
+        if (!qemu_console_is_graphic(con) &&
+            qemu_console_get_index(con) != 0) {
             sdl2_console[i].hidden = true;
         }
         sdl2_console[i].idx = i;

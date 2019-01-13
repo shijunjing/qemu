@@ -1402,6 +1402,10 @@ sub process {
 			$is_patch = 1;
 		}
 
+		if ($line =~ /^Author: .*via Qemu-devel.*<qemu-devel\@nongnu.org>/) {
+		    ERROR("Author email address is mangled by the mailing list\n" . $herecurr);
+		}
+
 #check the patch for a signoff:
 		if ($line =~ /^\s*signed-off-by:/i) {
 			# This is a signoff, if ugly, so do not double report.
@@ -2748,7 +2752,8 @@ sub process {
 				info_vreport|
 				error_report|
 				warn_report|
-				info_report}x;
+				info_report|
+				g_test_message}x;
 
 	if ($rawline =~ /\b(?:$qemu_error_funcs)\s*\(.*\".*\\n/) {
 		ERROR("Error messages should not contain newlines\n" . $herecurr);

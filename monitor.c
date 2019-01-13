@@ -83,6 +83,7 @@
 #include "sysemu/cpus.h"
 #include "sysemu/iothread.h"
 #include "qemu/cutils.h"
+#include "tcg/tcg.h"
 
 #if defined(TARGET_S390X)
 #include "hw/s390x/storage-keys.h"
@@ -707,9 +708,14 @@ static void monitor_qapi_event_init(void)
 
 static void handle_hmp_command(Monitor *mon, const char *cmdline);
 
+static void monitor_iothread_init(void);
+
 static void monitor_data_init(Monitor *mon, bool skip_flush,
                               bool use_io_thread)
 {
+    if (use_io_thread && !mon_iothread) {
+        monitor_iothread_init();
+    }
     memset(mon, 0, sizeof(Monitor));
     qemu_mutex_init(&mon->mon_lock);
     qemu_mutex_init(&mon->qmp.qmp_queue_lock);
@@ -1966,16 +1972,22 @@ static void hmp_info_numa(Monitor *mon, const QDict *qdict)
 
 #ifdef CONFIG_PROFILER
 
-int64_t tcg_time;
 int64_t dev_time;
 
 static void hmp_info_profile(Monitor *mon, const QDict *qdict)
 {
+    static int64_t last_cpu_exec_time;
+    int64_t cpu_exec_time;
+    int64_t delta;
+
+    cpu_exec_time = tcg_cpu_exec_time();
+    delta = cpu_exec_time - last_cpu_exec_time;
+
     monitor_printf(mon, "async time  %" PRId64 " (%0.3f)\n",
                    dev_time, dev_time / (double)NANOSECONDS_PER_SECOND);
     monitor_printf(mon, "qemu time   %" PRId64 " (%0.3f)\n",
-                   tcg_time, tcg_time / (double)NANOSECONDS_PER_SECOND);
-    tcg_time = 0;
+                   delta, delta / (double)NANOSECONDS_PER_SECOND);
+    last_cpu_exec_time = cpu_exec_time;
     dev_time = 0;
 }
 #else
@@ -4285,7 +4297,7 @@ int monitor_suspend(Monitor *mon)
 
     atomic_inc(&mon->suspend_cnt);
 
-    if (monitor_is_qmp(mon)) {
+    if (monitor_is_qmp(mon) && mon->use_io_thread) {
         /*
          * Kick I/O thread to make sure this takes effect.  It'll be
          * evaluated again in prepare() of the watch object.
@@ -4454,15 +4466,6 @@ static AioContext *monitor_get_aio_context(void)
 static void monitor_iothread_init(void)
 {
     mon_iothread = iothread_create("mon_iothread", &error_abort);
-
-    /*
-     * The dispatcher BH must run in the main loop thread, since we
-     * have commands assuming that context.  It would be nice to get
-     * rid of those assumptions.
-     */
-    qmp_dispatcher_bh = aio_bh_new(iohandler_get_aio_context(),
-                                   monitor_qmp_bh_dispatcher,
-                                   NULL);
 }
 
 void monitor_init_globals(void)
@@ -4472,7 +4475,15 @@ void monitor_init_globals(void)
     sortcmdlist();
     qemu_mutex_init(&monitor_lock);
     qemu_mutex_init(&mon_fdsets_lock);
-    monitor_iothread_init();
+
+    /*
+     * The dispatcher BH must run in the main loop thread, since we
+     * have commands assuming that context.  It would be nice to get
+     * rid of those assumptions.
+     */
+    qmp_dispatcher_bh = aio_bh_new(iohandler_get_aio_context(),
+                                   monitor_qmp_bh_dispatcher,
+                                   NULL);
 }
 
 /* These functions just adapt the readline interface in a typesafe way.  We
@@ -4493,17 +4504,27 @@ static void monitor_readline_flush(void *opaque)
 }
 
 /*
+ * Print to current monitor if we have one, else to stream.
+ * TODO should return int, so callers can calculate width, but that
+ * requires surgery to monitor_vprintf().  Left for another day.
+ */
+void monitor_vfprintf(FILE *stream, const char *fmt, va_list ap)
+{
+    if (cur_mon && !monitor_cur_is_qmp()) {
+        monitor_vprintf(cur_mon, fmt, ap);
+    } else {
+        vfprintf(stream, fmt, ap);
+    }
+}
+
+/*
  * Print to current monitor if we have one, else to stderr.
  * TODO should return int, so callers can calculate width, but that
  * requires surgery to monitor_vprintf().  Left for another day.
  */
 void error_vprintf(const char *fmt, va_list ap)
 {
-    if (cur_mon && !monitor_cur_is_qmp()) {
-        monitor_vprintf(cur_mon, fmt, ap);
-    } else {
-        vfprintf(stderr, fmt, ap);
-    }
+    monitor_vfprintf(stderr, fmt, ap);
 }
 
 void error_vprintf_unless_qmp(const char *fmt, va_list ap)
@@ -4607,7 +4628,9 @@ void monitor_cleanup(void)
      * we need to unregister from chardev below in
      * monitor_data_destroy(), and chardev is not thread-safe yet
      */
-    iothread_stop(mon_iothread);
+    if (mon_iothread) {
+        iothread_stop(mon_iothread);
+    }
 
     /* Flush output buffers and destroy monitors */
     qemu_mutex_lock(&monitor_lock);
@@ -4622,9 +4645,10 @@ void monitor_cleanup(void)
     /* QEMUBHs needs to be deleted before destroying the I/O thread */
     qemu_bh_delete(qmp_dispatcher_bh);
     qmp_dispatcher_bh = NULL;
-
-    iothread_destroy(mon_iothread);
-    mon_iothread = NULL;
+    if (mon_iothread) {
+        iothread_destroy(mon_iothread);
+        mon_iothread = NULL;
+    }
 }
 
 QemuOptsList qemu_mon_opts = {

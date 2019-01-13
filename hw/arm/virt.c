@@ -174,6 +174,7 @@ static const char *valid_cpus[] = {
     ARM_CPU_TYPE_NAME("cortex-a15"),
     ARM_CPU_TYPE_NAME("cortex-a53"),
     ARM_CPU_TYPE_NAME("cortex-a57"),
+    ARM_CPU_TYPE_NAME("cortex-a72"),
     ARM_CPU_TYPE_NAME("host"),
     ARM_CPU_TYPE_NAME("max"),
 };
@@ -712,6 +713,10 @@ static void create_uart(const VirtMachineState *vms, qemu_irq *pic, int uart,
         /* Mark as not usable by the normal world */
         qemu_fdt_setprop_string(vms->fdt, nodename, "status", "disabled");
         qemu_fdt_setprop_string(vms->fdt, nodename, "secure-status", "okay");
+
+        qemu_fdt_add_subnode(vms->fdt, "/secure-chosen");
+        qemu_fdt_setprop_string(vms->fdt, "/secure-chosen", "stdout-path",
+                                nodename);
     }
 
     g_free(nodename);
@@ -1758,6 +1763,7 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_VFIO_CALXEDA_XGMAC);
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_VFIO_AMD_XGBE);
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
+    machine_class_allow_dynamic_sysbus_dev(mc, TYPE_VFIO_PLATFORM);
     mc->block_default_type = IF_VIRTIO;
     mc->no_cdrom = 1;
     mc->pci_allow_0_address = true;
@@ -1866,6 +1872,9 @@ static void virt_machine_3_1_options(MachineClass *mc)
 }
 DEFINE_VIRT_MACHINE_AS_LATEST(3, 1)
 
+#define VIRT_COMPAT_3_0 \
+    HW_COMPAT_3_0
+
 static void virt_3_0_instance_init(Object *obj)
 {
     virt_3_1_instance_init(obj);
@@ -1874,6 +1883,7 @@ static void virt_3_0_instance_init(Object *obj)
 static void virt_machine_3_0_options(MachineClass *mc)
 {
     virt_machine_3_1_options(mc);
+    SET_MACHINE_COMPAT(mc, VIRT_COMPAT_3_0);
 }
 DEFINE_VIRT_MACHINE(3, 0)
 
@@ -1926,6 +1936,8 @@ static void virt_machine_2_10_options(MachineClass *mc)
 {
     virt_machine_2_11_options(mc);
     SET_MACHINE_COMPAT(mc, VIRT_COMPAT_2_10);
+    /* before 2.11 we never faulted accesses to bad addresses */
+    mc->ignore_memory_transaction_failures = true;
 }
 DEFINE_VIRT_MACHINE(2, 10)
 

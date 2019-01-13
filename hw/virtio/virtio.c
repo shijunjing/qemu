@@ -358,6 +358,10 @@ int virtio_queue_ready(VirtQueue *vq)
  * Called within rcu_read_lock().  */
 static int virtio_queue_empty_rcu(VirtQueue *vq)
 {
+    if (unlikely(vq->vdev->broken)) {
+        return 1;
+    }
+
     if (unlikely(!vq->vring.avail)) {
         return 1;
     }
@@ -372,6 +376,10 @@ static int virtio_queue_empty_rcu(VirtQueue *vq)
 int virtio_queue_empty(VirtQueue *vq)
 {
     bool empty;
+
+    if (unlikely(vq->vdev->broken)) {
+        return 1;
+    }
 
     if (unlikely(!vq->vring.avail)) {
         return 1;
@@ -1161,7 +1169,6 @@ int virtio_set_status(VirtIODevice *vdev, uint8_t val)
     return 0;
 }
 
-bool target_words_bigendian(void);
 static enum virtio_device_endian virtio_default_endian(void)
 {
     if (target_words_bigendian()) {
@@ -1604,6 +1611,8 @@ void virtio_del_queue(VirtIODevice *vdev, int n)
 
     vdev->vq[n].vring.num = 0;
     vdev->vq[n].vring.num_default = 0;
+    vdev->vq[n].handle_output = NULL;
+    vdev->vq[n].handle_aio_output = NULL;
 }
 
 static void virtio_set_isr(VirtIODevice *vdev, int value)
@@ -1807,7 +1816,7 @@ static const VMStateDescription vmstate_virtio_ringsize = {
 };
 
 static int get_extra_state(QEMUFile *f, void *pv, size_t size,
-                           VMStateField *field)
+                           const VMStateField *field)
 {
     VirtIODevice *vdev = pv;
     BusState *qbus = qdev_get_parent_bus(DEVICE(vdev));
@@ -1821,7 +1830,7 @@ static int get_extra_state(QEMUFile *f, void *pv, size_t size,
 }
 
 static int put_extra_state(QEMUFile *f, void *pv, size_t size,
-                           VMStateField *field, QJSON *vmdesc)
+                           const VMStateField *field, QJSON *vmdesc)
 {
     VirtIODevice *vdev = pv;
     BusState *qbus = qdev_get_parent_bus(DEVICE(vdev));
@@ -1970,14 +1979,14 @@ int virtio_save(VirtIODevice *vdev, QEMUFile *f)
 
 /* A wrapper for use as a VMState .put function */
 static int virtio_device_put(QEMUFile *f, void *opaque, size_t size,
-                              VMStateField *field, QJSON *vmdesc)
+                              const VMStateField *field, QJSON *vmdesc)
 {
     return virtio_save(VIRTIO_DEVICE(opaque), f);
 }
 
 /* A wrapper for use as a VMState .get function */
 static int virtio_device_get(QEMUFile *f, void *opaque, size_t size,
-                             VMStateField *field)
+                             const VMStateField *field)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(opaque);
     DeviceClass *dc = DEVICE_CLASS(VIRTIO_DEVICE_GET_CLASS(vdev));

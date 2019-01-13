@@ -1316,6 +1316,10 @@
 # @speed: the maximum speed, in bytes per second. The default is 0,
 #         for unlimited.
 #
+# @bitmap: the name of dirty bitmap if sync is "incremental".
+#          Must be present if sync is "incremental", must NOT be present
+#          otherwise. (Since 3.1)
+#
 # @compress: true to compress data, if the target format supports it.
 #            (default: false) (since 2.8)
 #
@@ -1348,7 +1352,8 @@
 ##
 { 'struct': 'BlockdevBackup',
   'data': { '*job-id': 'str', 'device': 'str', 'target': 'str',
-            'sync': 'MirrorSyncMode', '*speed': 'int', '*compress': 'bool',
+            'sync': 'MirrorSyncMode', '*speed': 'int',
+            '*bitmap': 'str', '*compress': 'bool',
             '*on-source-error': 'BlockdevOnError',
             '*on-target-error': 'BlockdevOnError',
             '*auto-finalize': 'bool', '*auto-dismiss': 'bool' } }
@@ -1934,6 +1939,8 @@
 
 ##
 # @x-block-dirty-bitmap-merge:
+#
+# FIXME: Rename @src_name and @dst_name to src-name and dst-name.
 #
 # Merge @src_name dirty bitmap to @dst_name dirty bitmap. @src_name dirty
 # bitmap is unchanged. On error, @dst_name is unchanged.
@@ -2895,7 +2902,9 @@
 #
 # @cache-clean-interval:  clean unused entries in the L2 and refcount
 #                         caches. The interval is in seconds. The default value
-#                         is 0 and it disables this feature (since 2.5)
+#                         is 600 on supporting platforms, and 0 on other
+#                         platforms. 0 disables this feature. (since 2.5)
+#
 # @encrypt:               Image decryption options. Mandatory for
 #                         encrypted images, except when doing a metadata-only
 #                         probe of the image. (since 2.10)
@@ -3647,6 +3656,12 @@
 #                 either generally or in certain configurations. In this case,
 #                 the default value does not work and the option must be
 #                 specified explicitly.
+# @auto-read-only: if true and @read-only is false, QEMU may automatically
+#                  decide not to open the image read-write as requested, but
+#                  fall back to read-only instead (and switch between the modes
+#                  later), e.g. depending on whether the image file is writable
+#                  or whether a writing user is attached to the node
+#                  (default: false, since 3.1)
 # @detect-zeroes: detect and optimize zero writes (Since 2.1)
 #                 (default: off)
 # @force-share:   force share all permission on added nodes.
@@ -3662,6 +3677,7 @@
             '*discard': 'BlockdevDiscardOptions',
             '*cache': 'BlockdevCacheOptions',
             '*read-only': 'bool',
+            '*auto-read-only': 'bool',
             '*force-share': 'bool',
             '*detect-zeroes': 'BlockdevDetectZeroesOptions' },
   'discriminator': 'driver',

@@ -48,10 +48,6 @@ struct QTestState
 static GHookList abrt_hooks;
 static struct sigaction sigact_old;
 
-#define g_assert_no_errno(ret) do { \
-    g_assert_cmpint(ret, !=, -1); \
-} while (0)
-
 static int qtest_query_target_endianness(QTestState *s);
 
 static int init_socket(const char *socket_path)
@@ -61,7 +57,7 @@ static int init_socket(const char *socket_path)
     int ret;
 
     sock = socket(PF_UNIX, SOCK_STREAM, 0);
-    g_assert_no_errno(sock);
+    g_assert_cmpint(sock, !=, -1);
 
     addr.sun_family = AF_UNIX;
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socket_path);
@@ -70,9 +66,9 @@ static int init_socket(const char *socket_path)
     do {
         ret = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
     } while (ret == -1 && errno == EINTR);
-    g_assert_no_errno(ret);
+    g_assert_cmpint(ret, !=, -1);
     ret = listen(sock, 1);
-    g_assert_no_errno(ret);
+    g_assert_cmpint(ret, !=, -1);
 
     return sock;
 }
@@ -219,24 +215,28 @@ QTestState *qtest_init_without_qmp_handshake(bool use_oob,
 
     qtest_add_abrt_handler(kill_qemu_hook_func, s);
 
+    command = g_strdup_printf("exec %s "
+                              "-qtest unix:%s,nowait "
+                              "-qtest-log %s "
+                              "-chardev socket,path=%s,nowait,id=char0 "
+                              "-mon chardev=char0,mode=control%s "
+                              "-machine accel=qtest "
+                              "-display none "
+                              "%s", qemu_binary, socket_path,
+                              getenv("QTEST_LOG") ? "/dev/fd/2" : "/dev/null",
+                              qmp_socket_path, use_oob ? ",x-oob=on" : "",
+                              extra_args ?: "");
+
+    g_test_message("starting QEMU: %s", command);
+
     s->qemu_pid = fork();
     if (s->qemu_pid == 0) {
         setenv("QEMU_AUDIO_DRV", "none", true);
-        command = g_strdup_printf("exec %s "
-                                  "-qtest unix:%s,nowait "
-                                  "-qtest-log %s "
-                                  "-chardev socket,path=%s,nowait,id=char0 "
-                                  "-mon chardev=char0,mode=control%s "
-                                  "-machine accel=qtest "
-                                  "-display none "
-                                  "%s", qemu_binary, socket_path,
-                                  getenv("QTEST_LOG") ? "/dev/fd/2" : "/dev/null",
-                                  qmp_socket_path, use_oob ? ",x-oob=on" : "",
-                                  extra_args ?: "");
         execlp("/bin/sh", "sh", "-c", command, NULL);
         exit(1);
     }
 
+    g_free(command);
     s->fd = socket_accept(sock);
     if (s->fd >= 0) {
         s->qmp_fd = socket_accept(qmpsock);
@@ -325,7 +325,6 @@ static void socket_send(int fd, const char *buf, size_t size)
             continue;
         }
 
-        g_assert_no_errno(len);
         g_assert_cmpint(len, >, 0);
 
         offset += len;

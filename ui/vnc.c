@@ -3205,7 +3205,7 @@ static const DisplayChangeListenerOps dcl_ops = {
     .dpy_cursor_define    = vnc_dpy_cursor_define,
 };
 
-void vnc_display_init(const char *id)
+void vnc_display_init(const char *id, Error **errp)
 {
     VncDisplay *vd;
 
@@ -3222,13 +3222,14 @@ void vnc_display_init(const char *id)
 
     if (keyboard_layout) {
         trace_vnc_key_map_init(keyboard_layout);
-        vd->kbd_layout = init_keyboard_layout(name2keysym, keyboard_layout);
+        vd->kbd_layout = init_keyboard_layout(name2keysym,
+                                              keyboard_layout, errp);
     } else {
-        vd->kbd_layout = init_keyboard_layout(name2keysym, "en-us");
+        vd->kbd_layout = init_keyboard_layout(name2keysym, "en-us", errp);
     }
 
     if (!vd->kbd_layout) {
-        exit(1);
+        return;
     }
 
     vd->share_policy = VNC_SHARE_POLICY_ALLOW_EXCLUSIVE;
@@ -3821,9 +3822,6 @@ void vnc_display_open(const char *id, Error **errp)
     bool reverse = false;
     const char *credid;
     bool sasl = false;
-#ifdef CONFIG_VNC_SASL
-    int saslErr;
-#endif
     int acl = 0;
     int lock_key_sync = 1;
     int key_delay_ms;
@@ -3963,10 +3961,14 @@ void vnc_display_open(const char *id, Error **errp)
     trace_vnc_auth_init(vd, 1, vd->ws_auth, vd->ws_subauth);
 
 #ifdef CONFIG_VNC_SASL
-    if ((saslErr = sasl_server_init(NULL, "qemu")) != SASL_OK) {
-        error_setg(errp, "Failed to initialize SASL auth: %s",
-                   sasl_errstring(saslErr, NULL, NULL));
-        goto fail;
+    if (sasl) {
+        int saslErr = sasl_server_init(NULL, "qemu");
+
+        if (saslErr != SASL_OK) {
+            error_setg(errp, "Failed to initialize SASL auth: %s",
+                       sasl_errstring(saslErr, NULL, NULL));
+            goto fail;
+        }
     }
 #endif
     vd->lock_key_sync = lock_key_sync;
@@ -4078,11 +4080,15 @@ int vnc_init_func(void *opaque, QemuOpts *opts, Error **errp)
     char *id = (char *)qemu_opts_id(opts);
 
     assert(id);
-    vnc_display_init(id);
+    vnc_display_init(id, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return -1;
+    }
     vnc_display_open(id, &local_err);
     if (local_err != NULL) {
-        error_reportf_err(local_err, "Failed to start VNC server: ");
-        exit(1);
+        error_propagate(errp, local_err);
+        return -1;
     }
     return 0;
 }

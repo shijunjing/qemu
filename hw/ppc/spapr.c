@@ -610,6 +610,29 @@ static void spapr_populate_cpus_dt_node(void *fdt, sPAPRMachineState *spapr)
     g_free(rev);
 }
 
+static int spapr_rng_populate_dt(void *fdt)
+{
+    int node;
+    int ret;
+
+    node = qemu_fdt_add_subnode(fdt, "/ibm,platform-facilities");
+    if (node <= 0) {
+        return -1;
+    }
+    ret = fdt_setprop_string(fdt, node, "device_type",
+                             "ibm,platform-facilities");
+    ret |= fdt_setprop_cell(fdt, node, "#address-cells", 0x1);
+    ret |= fdt_setprop_cell(fdt, node, "#size-cells", 0x0);
+
+    node = fdt_add_subnode(fdt, node, "ibm,random-v1");
+    if (node <= 0) {
+        return -1;
+    }
+    ret |= fdt_setprop_string(fdt, node, "compatible", "ibm,random");
+
+    return ret ? -1 : 0;
+}
+
 static uint32_t spapr_pc_dimm_node(MemoryDeviceInfoList *list, ram_addr_t addr)
 {
     MemoryDeviceInfoList *info;
@@ -1915,6 +1938,7 @@ static const VMStateDescription vmstate_spapr = {
         &vmstate_spapr_cap_sbbc,
         &vmstate_spapr_cap_ibs,
         &vmstate_spapr_irq_map,
+        &vmstate_spapr_cap_nested_kvm_hv,
         NULL
     }
 };
@@ -3128,14 +3152,12 @@ static void spapr_memory_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     Error *local_err = NULL;
     sPAPRMachineState *ms = SPAPR_MACHINE(hotplug_dev);
     PCDIMMDevice *dimm = PC_DIMM(dev);
-    PCDIMMDeviceClass *ddc = PC_DIMM_GET_CLASS(dimm);
-    MemoryRegion *mr = ddc->get_memory_region(dimm, &error_abort);
     uint64_t size, addr;
     uint32_t node;
 
-    size = memory_region_size(mr);
+    size = memory_device_get_region_size(MEMORY_DEVICE(dev), &error_abort);
 
-    pc_dimm_plug(dev, MACHINE(ms), &local_err);
+    pc_dimm_plug(dimm, MACHINE(ms), &local_err);
     if (local_err) {
         goto out;
     }
@@ -3158,7 +3180,7 @@ static void spapr_memory_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     return;
 
 out_unplug:
-    pc_dimm_unplug(dev, MACHINE(ms));
+    pc_dimm_unplug(dimm, MACHINE(ms));
 out:
     error_propagate(errp, local_err);
 }
@@ -3169,9 +3191,7 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     const sPAPRMachineClass *smc = SPAPR_MACHINE_GET_CLASS(hotplug_dev);
     sPAPRMachineState *spapr = SPAPR_MACHINE(hotplug_dev);
     PCDIMMDevice *dimm = PC_DIMM(dev);
-    PCDIMMDeviceClass *ddc = PC_DIMM_GET_CLASS(dimm);
     Error *local_err = NULL;
-    MemoryRegion *mr;
     uint64_t size;
     Object *memdev;
     hwaddr pagesize;
@@ -3181,11 +3201,11 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
         return;
     }
 
-    mr = ddc->get_memory_region(dimm, errp);
-    if (!mr) {
+    size = memory_device_get_region_size(MEMORY_DEVICE(dimm), &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
         return;
     }
-    size = memory_region_size(mr);
 
     if (size % SPAPR_MEMORY_BLOCK_SIZE) {
         error_setg(errp, "Hotplugged memory size must be a multiple of "
@@ -3202,7 +3222,7 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
         return;
     }
 
-    pc_dimm_pre_plug(dev, MACHINE(hotplug_dev), NULL, errp);
+    pc_dimm_pre_plug(dimm, MACHINE(hotplug_dev), NULL, errp);
 }
 
 struct sPAPRDIMMState {
@@ -3257,9 +3277,8 @@ static sPAPRDIMMState *spapr_recover_pending_dimm_state(sPAPRMachineState *ms,
                                                         PCDIMMDevice *dimm)
 {
     sPAPRDRConnector *drc;
-    PCDIMMDeviceClass *ddc = PC_DIMM_GET_CLASS(dimm);
-    MemoryRegion *mr = ddc->get_memory_region(dimm, &error_abort);
-    uint64_t size = memory_region_size(mr);
+    uint64_t size = memory_device_get_region_size(MEMORY_DEVICE(dimm),
+                                                  &error_abort);
     uint32_t nr_lmbs = size / SPAPR_MEMORY_BLOCK_SIZE;
     uint32_t avail_lmbs = 0;
     uint64_t addr_start, addr;
@@ -3314,7 +3333,7 @@ static void spapr_memory_unplug(HotplugHandler *hotplug_dev, DeviceState *dev)
     sPAPRMachineState *spapr = SPAPR_MACHINE(hotplug_dev);
     sPAPRDIMMState *ds = spapr_pending_dimm_unplugs_find(spapr, PC_DIMM(dev));
 
-    pc_dimm_unplug(dev, MACHINE(hotplug_dev));
+    pc_dimm_unplug(PC_DIMM(dev), MACHINE(hotplug_dev));
     object_unparent(OBJECT(dev));
     spapr_pending_dimm_unplugs_remove(spapr, ds);
 }
@@ -3325,14 +3344,12 @@ static void spapr_memory_unplug_request(HotplugHandler *hotplug_dev,
     sPAPRMachineState *spapr = SPAPR_MACHINE(hotplug_dev);
     Error *local_err = NULL;
     PCDIMMDevice *dimm = PC_DIMM(dev);
-    PCDIMMDeviceClass *ddc = PC_DIMM_GET_CLASS(dimm);
-    MemoryRegion *mr = ddc->get_memory_region(dimm, &error_abort);
     uint32_t nr_lmbs;
     uint64_t size, addr_start, addr;
     int i;
     sPAPRDRConnector *drc;
 
-    size = memory_region_size(mr);
+    size = memory_device_get_region_size(MEMORY_DEVICE(dimm), &error_abort);
     nr_lmbs = size / SPAPR_MEMORY_BLOCK_SIZE;
 
     addr_start = object_property_get_uint(OBJECT(dimm), PC_DIMM_ADDR_PROP,
@@ -3886,6 +3903,7 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
     smc->default_caps.caps[SPAPR_CAP_SBBC] = SPAPR_CAP_BROKEN;
     smc->default_caps.caps[SPAPR_CAP_IBS] = SPAPR_CAP_BROKEN;
     smc->default_caps.caps[SPAPR_CAP_HPT_MAXPAGESIZE] = 16; /* 64kiB */
+    smc->default_caps.caps[SPAPR_CAP_NESTED_KVM_HV] = SPAPR_CAP_OFF;
     spapr_caps_add_properties(smc, &error_abort);
     smc->irq = &spapr_irq_xics;
 }

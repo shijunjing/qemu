@@ -965,6 +965,7 @@ void cpu_exec_realizefn(CPUState *cpu, Error **errp)
         tcg_target_initialized = true;
         cc->tcg_initialize();
     }
+    tlb_init(cpu);
 
 #ifndef CONFIG_USER_ONLY
     if (qdev_get_vmsd(DEVICE(cpu)) == NULL) {
@@ -1734,7 +1735,7 @@ long qemu_getrampagesize(void)
 }
 #endif
 
-#ifdef __linux__
+#ifdef CONFIG_POSIX
 static int64_t get_file_size(int fd)
 {
     int64_t size = lseek(fd, 0, SEEK_END);
@@ -2230,7 +2231,7 @@ static void ram_block_add(RAMBlock *new_block, Error **errp, bool shared)
     }
 }
 
-#ifdef __linux__
+#ifdef CONFIG_POSIX
 RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
                                  uint32_t ram_flags, int fd,
                                  Error **errp)
@@ -3906,11 +3907,6 @@ int qemu_target_page_bits_min(void)
 }
 #endif
 
-/*
- * A helper function for the _utterly broken_ virtio device model to find out if
- * it's running on a big endian machine. Don't do this at home kids!
- */
-bool target_words_bigendian(void);
 bool target_words_bigendian(void)
 {
 #if defined(TARGET_WORDS_BIGENDIAN)
