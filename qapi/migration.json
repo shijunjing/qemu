@@ -6,6 +6,7 @@
 ##
 
 { 'include': 'common.json' }
+{ 'include': 'sockets.json' }
 
 ##
 # @MigrationStats:
@@ -41,6 +42,9 @@
 #
 # @multifd-bytes: The number of bytes sent through multifd (since 3.0)
 #
+# @pages-per-second: the number of memory pages transferred per second
+#        (Since 4.0)
+#
 # Since: 0.14.0
 ##
 { 'struct': 'MigrationStats',
@@ -49,7 +53,7 @@
            'normal-bytes': 'int', 'dirty-pages-rate' : 'int',
            'mbps' : 'number', 'dirty-sync-count' : 'int',
            'postcopy-requests' : 'int', 'page-size' : 'int',
-           'multifd-bytes' : 'uint64' } }
+           'multifd-bytes' : 'uint64', 'pages-per-second' : 'uint64' } }
 
 ##
 # @XBZRLECacheStats:
@@ -196,6 +200,8 @@
 # @compression: migration compression statistics, only returned if compression
 #           feature is on and status is 'active' or 'completed' (Since 3.1)
 #
+# @socket-address: Only used for tcp, to know what the real port is (Since 4.0)
+#
 # Since: 0.14.0
 ##
 { 'struct': 'MigrationInfo',
@@ -210,7 +216,8 @@
            '*error-desc': 'str',
            '*postcopy-blocktime' : 'uint32',
            '*postcopy-vcpu-blocktime': ['uint32'],
-           '*compression': 'CompressionStats'} }
+           '*compression': 'CompressionStats',
+           '*socket-address': ['SocketAddress'] } }
 
 ##
 # @query-migrate:
@@ -406,13 +413,16 @@
 #           devices (and thus take locks) immediately at the end of migration.
 #           (since 3.0)
 #
+# @x-ignore-shared: If enabled, QEMU will not migrate shared memory (since 4.0)
+#
 # Since: 1.2
 ##
 { 'enum': 'MigrationCapability',
   'data': ['xbzrle', 'rdma-pin-all', 'auto-converge', 'zero-blocks',
            'compress', 'events', 'postcopy-ram', 'x-colo', 'release-ram',
            'block', 'return-path', 'pause-before-switchover', 'x-multifd',
-           'dirty-bitmaps', 'postcopy-blocktime', 'late-block-activate' ] }
+           'dirty-bitmaps', 'postcopy-blocktime', 'late-block-activate',
+           'x-ignore-shared' ] }
 
 ##
 # @MigrationCapabilityStatus:
@@ -476,6 +486,18 @@
 # @MigrationParameter:
 #
 # Migration parameters enumeration
+#
+# @announce-initial: Initial delay (in milliseconds) before sending the first
+#          announce (Since 4.0)
+#
+# @announce-max: Maximum delay (in milliseconds) between packets in the
+#          announcement (Since 4.0)
+#
+# @announce-rounds: Number of self-announce packets sent after migration
+#          (Since 4.0)
+#
+# @announce-step: Increase in delay (in milliseconds) between subsequent
+#          packets in the announcement (Since 4.0)
 #
 # @compress-level: Set the compression level to be used in live migration,
 #          the compression level is an integer between 0 and 9, where 0 means
@@ -554,10 +576,13 @@
 #
 # @max-cpu-throttle: maximum cpu throttle percentage.
 #                    Defaults to 99. (Since 3.1)
+#
 # Since: 2.4
 ##
 { 'enum': 'MigrationParameter',
-  'data': ['compress-level', 'compress-threads', 'decompress-threads',
+  'data': ['announce-initial', 'announce-max',
+           'announce-rounds', 'announce-step',
+           'compress-level', 'compress-threads', 'decompress-threads',
            'compress-wait-thread',
            'cpu-throttle-initial', 'cpu-throttle-increment',
            'tls-creds', 'tls-hostname', 'max-bandwidth',
@@ -568,6 +593,18 @@
 
 ##
 # @MigrateSetParameters:
+#
+# @announce-initial: Initial delay (in milliseconds) before sending the first
+#          announce (Since 4.0)
+#
+# @announce-max: Maximum delay (in milliseconds) between packets in the
+#          announcement (Since 4.0)
+#
+# @announce-rounds: Number of self-announce packets sent after migration
+#          (Since 4.0)
+#
+# @announce-step: Increase in delay (in milliseconds) between subsequent
+#          packets in the announcement (Since 4.0)
 #
 # @compress-level: compression level
 #
@@ -650,7 +687,11 @@
 # TODO either fuse back into MigrationParameters, or make
 # MigrationParameters members mandatory
 { 'struct': 'MigrateSetParameters',
-  'data': { '*compress-level': 'int',
+  'data': { '*announce-initial': 'size',
+            '*announce-max': 'size',
+            '*announce-rounds': 'size',
+            '*announce-step': 'size',
+            '*compress-level': 'int',
             '*compress-threads': 'int',
             '*compress-wait-thread': 'bool',
             '*decompress-threads': 'int',
@@ -688,6 +729,18 @@
 # @MigrationParameters:
 #
 # The optional members aren't actually optional.
+#
+# @announce-initial: Initial delay (in milliseconds) before sending the
+#          first announce (Since 4.0)
+#
+# @announce-max: Maximum delay (in milliseconds) between packets in the
+#          announcement (Since 4.0)
+#
+# @announce-rounds: Number of self-announce packets sent after migration
+#          (Since 4.0)
+#
+# @announce-step: Increase in delay (in milliseconds) between subsequent
+#          packets in the announcement (Since 4.0)
 #
 # @compress-level: compression level
 #
@@ -766,7 +819,11 @@
 # Since: 2.4
 ##
 { 'struct': 'MigrationParameters',
-  'data': { '*compress-level': 'uint8',
+  'data': { '*announce-initial': 'size',
+            '*announce-max': 'size',
+            '*announce-rounds': 'size',
+            '*announce-step': 'size',
+            '*compress-level': 'uint8',
             '*compress-threads': 'uint8',
             '*compress-wait-thread': 'bool',
             '*decompress-threads': 'uint8',
@@ -1257,7 +1314,8 @@
 # Since: 2.9
 ##
 { 'command': 'xen-set-replication',
-  'data': { 'enable': 'bool', 'primary': 'bool', '*failover' : 'bool' } }
+  'data': { 'enable': 'bool', 'primary': 'bool', '*failover' : 'bool' },
+  'if': 'defined(CONFIG_REPLICATION)' }
 
 ##
 # @ReplicationStatus:
@@ -1272,7 +1330,8 @@
 # Since: 2.9
 ##
 { 'struct': 'ReplicationStatus',
-  'data': { 'error': 'bool', '*desc': 'str' } }
+  'data': { 'error': 'bool', '*desc': 'str' },
+  'if': 'defined(CONFIG_REPLICATION)' }
 
 ##
 # @query-xen-replication-status:
@@ -1289,7 +1348,8 @@
 # Since: 2.9
 ##
 { 'command': 'query-xen-replication-status',
-  'returns': 'ReplicationStatus' }
+  'returns': 'ReplicationStatus',
+  'if': 'defined(CONFIG_REPLICATION)' }
 
 ##
 # @xen-colo-do-checkpoint:
@@ -1305,7 +1365,8 @@
 #
 # Since: 2.9
 ##
-{ 'command': 'xen-colo-do-checkpoint' }
+{ 'command': 'xen-colo-do-checkpoint',
+  'if': 'defined(CONFIG_REPLICATION)' }
 
 ##
 # @COLOStatus:
@@ -1332,7 +1393,7 @@
 # Example:
 #
 # -> { "execute": "query-colo-status" }
-# <- { "return": { "mode": "primary", "active": true, "reason": "request" } }
+# <- { "return": { "mode": "primary", "reason": "request" } }
 #
 # Since: 3.1
 ##
@@ -1356,7 +1417,8 @@
 #
 # Since: 3.0
 ##
-{ 'command': 'migrate-recover', 'data': { 'uri': 'str' },
+{ 'command': 'migrate-recover',
+  'data': { 'uri': 'str' },
   'allow-oob': true }
 
 ##

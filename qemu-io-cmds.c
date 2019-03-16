@@ -10,6 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qapi/qmp/qdict.h"
 #include "qemu-io.h"
 #include "sysemu/block-backend.h"
 #include "block/block.h"
@@ -113,7 +114,7 @@ static int command(BlockBackend *blk, const cmdinfo_t *ct, int argc,
         }
     }
 
-    optind = 0;
+    qemu_reset_optind();
     return ct->cfunc(blk, argc, argv);
 }
 
@@ -1660,6 +1661,7 @@ static int info_f(BlockBackend *blk, int argc, char **argv)
     BlockDriverState *bs = blk_bs(blk);
     BlockDriverInfo bdi;
     ImageInfoSpecific *spec_info;
+    Error *local_err = NULL;
     char s1[64], s2[64];
     int ret;
 
@@ -1681,7 +1683,11 @@ static int info_f(BlockBackend *blk, int argc, char **argv)
     printf("cluster size: %s\n", s1);
     printf("vm state offset: %s\n", s2);
 
-    spec_info = bdrv_get_specific_info(bs);
+    spec_info = bdrv_get_specific_info(bs, &local_err);
+    if (local_err) {
+        error_report_err(local_err);
+        return -EIO;
+    }
     if (spec_info) {
         printf("Format specific information:\n");
         bdrv_image_info_specific_dump(fprintf, stdout, spec_info);
@@ -1978,6 +1984,7 @@ static int reopen_f(BlockBackend *blk, int argc, char **argv)
     int flags = bs->open_flags;
     bool writethrough = !blk_enable_write_cache(blk);
     bool has_rw_option = false;
+    bool has_cache_option = false;
 
     BlockReopenQueue *brq;
     Error *local_err = NULL;
@@ -1989,6 +1996,7 @@ static int reopen_f(BlockBackend *blk, int argc, char **argv)
                 error_report("Invalid cache option: %s", optarg);
                 return -EINVAL;
             }
+            has_cache_option = true;
             break;
         case 'o':
             if (!qemu_opts_parse_noisily(&reopen_opts, optarg, 0)) {
@@ -2046,12 +2054,34 @@ static int reopen_f(BlockBackend *blk, int argc, char **argv)
     }
 
     qopts = qemu_opts_find(&reopen_opts, NULL);
-    opts = qopts ? qemu_opts_to_qdict(qopts, NULL) : NULL;
+    opts = qopts ? qemu_opts_to_qdict(qopts, NULL) : qdict_new();
     qemu_opts_reset(&reopen_opts);
 
+    if (qdict_haskey(opts, BDRV_OPT_READ_ONLY)) {
+        if (has_rw_option) {
+            error_report("Cannot set both -r/-w and '" BDRV_OPT_READ_ONLY "'");
+            qobject_unref(opts);
+            return -EINVAL;
+        }
+    } else {
+        qdict_put_bool(opts, BDRV_OPT_READ_ONLY, !(flags & BDRV_O_RDWR));
+    }
+
+    if (qdict_haskey(opts, BDRV_OPT_CACHE_DIRECT) ||
+        qdict_haskey(opts, BDRV_OPT_CACHE_NO_FLUSH)) {
+        if (has_cache_option) {
+            error_report("Cannot set both -c and the cache options");
+            qobject_unref(opts);
+            return -EINVAL;
+        }
+    } else {
+        qdict_put_bool(opts, BDRV_OPT_CACHE_DIRECT, flags & BDRV_O_NOCACHE);
+        qdict_put_bool(opts, BDRV_OPT_CACHE_NO_FLUSH, flags & BDRV_O_NO_FLUSH);
+    }
+
     bdrv_subtree_drained_begin(bs);
-    brq = bdrv_reopen_queue(NULL, bs, opts, flags);
-    bdrv_reopen_multiple(bdrv_get_aio_context(bs), brq, &local_err);
+    brq = bdrv_reopen_queue(NULL, bs, opts, true);
+    bdrv_reopen_multiple(brq, &local_err);
     bdrv_subtree_drained_end(bs);
 
     if (local_err) {
