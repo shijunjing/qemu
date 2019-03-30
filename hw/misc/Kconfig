@@ -36,6 +36,11 @@ config EDU
     default y if TEST_DEVICES
     depends on PCI
 
+config EDU_CONVERGE
+    bool
+    default y if TEST_DEVICES
+    depends on PCI
+
 config PCA9552
     bool
     depends on I2C
