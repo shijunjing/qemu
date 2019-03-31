@@ -347,13 +347,17 @@ static void usb_msd_handle_reset(USBDevice *dev)
     s->mode = USB_MSDM_CBW;
 }
 
-static void usb_msd_handle_control(USBDevice *dev, USBPacket *p,
+void usb_msd_handle_control(USBDevice *dev, USBPacket *p,
+               int request, int value, int index, int length, uint8_t *data);
+
+void usb_msd_handle_control(USBDevice *dev, USBPacket *p,
                int request, int value, int index, int length, uint8_t *data)
 {
     MSDState *s = (MSDState *)dev;
     SCSIDevice *scsi_dev;
     int ret, maxlun;
 
+    printf("usb_msd_handle_control return data address = %p\n", data);
     ret = usb_desc_handle_control(dev, p, request, value, index, length, data);
     if (ret >= 0) {
         return;
@@ -588,6 +592,9 @@ static const struct SCSIBusInfo usb_msd_scsi_info_bot = {
     .load_request = usb_msd_load_request,
 };
 
+extern uint32_t  Num_usb_storage_dev;
+extern MSDState  *converge_usb_storage_dev[];
+
 static void usb_msd_storage_realize(USBDevice *dev, Error **errp)
 {
     MSDState *s = USB_STORAGE_DEV(dev);
@@ -634,6 +641,12 @@ static void usb_msd_storage_realize(USBDevice *dev, Error **errp)
     }
     usb_msd_handle_reset(dev);
     s->scsi_dev = scsi_dev;
+
+    printf("usb_msd_storage_realize Num_usb_storage_dev = %d\n", Num_usb_storage_dev);
+    if (Num_usb_storage_dev < 10){
+      converge_usb_storage_dev[Num_usb_storage_dev] = s;
+      Num_usb_storage_dev++;
+    }
 }
 
 static void usb_msd_bot_realize(USBDevice *dev, Error **errp)

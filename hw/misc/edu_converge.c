@@ -40,6 +40,9 @@
 #define DMA_START       0x40000
 #define DMA_SIZE        4096
 
+uint32_t  Num_usb_storage_dev = 0;
+MSDState  *converge_usb_storage_dev[10];
+
 typedef struct {
     PCIDevice pdev;
     MemoryRegion mmio;
@@ -75,6 +78,8 @@ typedef struct {
     USBBus    usb_bus;
     USBPort   port;
     MSDState  *usb_storage_dev;
+
+    uint64_t  GuestOutputBufferAddress;
 } EduState;
 
 static bool edu_msi_enabled(EduState *edu)
@@ -224,6 +229,10 @@ static uint64_t edu_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case 0x98:
         dma_rw(edu, false, &val, &edu->dma.cmd, false);
         break;
+    case 0x100:
+        val = Num_usb_storage_dev;
+        printf("read offset 0x100, and val = %ld\n", val);
+        break;
     }
 
     return val;
@@ -233,6 +242,7 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
     EduState *edu = opaque;
+    uint32_t tmp[5];
 
     if (addr < 0x80 && size != 4) {
         return;
@@ -286,6 +296,12 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
             break;
         }
         dma_rw(edu, true, &val, &edu->dma.cmd, true);
+        break;
+    case 0x100: // Guest output buffer address
+        edu->GuestOutputBufferAddress = val;
+        printf("GuestOutputBufferAddress = %lx\n", val);
+        tmp[0] = 0x12345678;
+        pci_dma_write(PCI_DEVICE(edu), edu->GuestOutputBufferAddress, tmp, 4);
         break;
     }
 }
@@ -408,6 +424,9 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
                       USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
     dev = usb_create_simple(&edu->usb_bus, "usb-bot");
     edu->usb_storage_dev = (MSDState *)dev;
+
+    Num_usb_storage_dev = 0;
+    //converge_usb_storage_dev[0] = NULL;
 }
 
 static void pci_edu_uninit(PCIDevice *pdev)
